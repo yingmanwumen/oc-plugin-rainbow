@@ -17,17 +17,27 @@ export type ToggleField = "fg" | "bg";
 export type NumberField = "speed" | "turns" | "glow";
 export type Field = ToggleField | NumberField;
 
-type Row = {
-  key: Field;
+type RowBase = {
   title: string;
   description: string;
   category: string;
-  kind: "toggle" | "number";
-  step?: number;
-  min?: number;
-  max?: number;
-  digits?: number;
 };
+
+type ToggleRow = RowBase & {
+  key: ToggleField;
+  kind: "toggle";
+};
+
+type NumberRow = RowBase & {
+  key: NumberField;
+  kind: "number";
+  step: number;
+  min: number;
+  max: number;
+  digits: number;
+};
+
+type Row = ToggleRow | NumberRow;
 
 const rows: Row[] = [
   {
@@ -79,10 +89,11 @@ const rows: Row[] = [
   },
 ];
 
-export const settingByField = Object.fromEntries(rows.map((item) => [item.key, item])) as Record<
-  Field,
-  Row
->;
+export const settingByField = Object.fromEntries(rows.map((item) => [item.key, item])) as {
+  [K in ToggleField]: ToggleRow;
+} & {
+  [K in NumberField]: NumberRow;
+};
 
 export const createSettingKey = (id: string) => {
   return {
@@ -173,8 +184,9 @@ export const SettingsDialog = (props: {
           const next = field(item.value);
           if (!next) return;
           setCur(next);
-          if (settingByField[next].kind === "toggle") {
-            props.flip(next);
+          const row = settingByField[next];
+          if (row.kind === "toggle") {
+            props.flip(row.key);
           }
         }}
       />
