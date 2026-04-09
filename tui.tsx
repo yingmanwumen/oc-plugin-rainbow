@@ -1,7 +1,8 @@
 /** @jsxImportSource @opentui/solid */
-import type { OptimizedBuffer } from "@opentui/core";
-import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui";
+import { TargetChannel, type OptimizedBuffer } from "@opentui/core";
+import type { TuiPlugin, TuiPluginModule, TuiRouteCurrent } from "@opencode-ai/plugin/tui";
 import { createSignal } from "solid-js";
+import { LogoScreen } from "./logo-screen";
 import { createRainbowPostProcess } from "./rainbow-post-process";
 import {
   SettingsDialog,
@@ -16,6 +17,19 @@ const id = "tui-rainbow";
 const speed = 0.008;
 const turns = 3;
 const glow = 0.05;
+const splashRoute = `${id}.logo`;
+const splashCommand = `${id}.logo-splash`;
+const splashFadeInMs = 1050;
+const splashPeakHoldMs = 34;
+const splashFadeOutMs = 100;
+const splashKeybind = "ctrl+shift+r";
+
+type SplashPhase = "idle" | "fade-in" | "hold" | "fade-out";
+type SplashState = {
+  phase: SplashPhase;
+  elapsed: number;
+  queued: boolean;
+};
 
 type Api = Parameters<TuiPlugin>[0];
 type Cfg = SettingsState;
@@ -36,6 +50,66 @@ const num = (value: unknown, fallback: number) => {
 const bool = (value: unknown, fallback: boolean) => {
   if (typeof value !== "boolean") return fallback;
   return value;
+};
+
+const obj = (value: unknown) => {
+  if (!value || typeof value !== "object") return;
+  return value as Record<string, unknown>;
+};
+
+const splashFadeIn = (t: number) => {
+  const split = 0.78;
+  const base = 0.16;
+  if (t <= 0) return 0;
+  if (t < split) {
+    const head = t / split;
+    return base * head * head;
+  }
+  if (t >= 1) return 1;
+  const tail = (t - split) / (1 - split);
+  return base + (1 - base) * 2 ** (10 * tail - 10);
+};
+
+const splashFadeOut = (t: number) => {
+  if (t <= 0) return 1;
+  if (t >= 1) return 0;
+  const left = 1 - t;
+  return left * left * left;
+};
+
+const whiteMatrix = new Float32Array(16);
+
+const setWhiteMatrix = (strength: number) => {
+  const keep = 1 - strength;
+  whiteMatrix[0] = keep;
+  whiteMatrix[1] = 0;
+  whiteMatrix[2] = 0;
+  whiteMatrix[3] = strength;
+  whiteMatrix[4] = 0;
+  whiteMatrix[5] = keep;
+  whiteMatrix[6] = 0;
+  whiteMatrix[7] = strength;
+  whiteMatrix[8] = 0;
+  whiteMatrix[9] = 0;
+  whiteMatrix[10] = keep;
+  whiteMatrix[11] = strength;
+  whiteMatrix[12] = 0;
+  whiteMatrix[13] = 0;
+  whiteMatrix[14] = 0;
+  whiteMatrix[15] = 1;
+};
+
+const cloneRoute = (route: TuiRouteCurrent): TuiRouteCurrent => {
+  if (!("params" in route)) return { name: "home" };
+  if (!route.params) return { name: route.name };
+  return {
+    name: route.name,
+    params: { ...route.params },
+  };
+};
+
+const navigateRoute = (api: Api, route: TuiRouteCurrent) => {
+  api.route.navigate(route.name, "params" in route ? route.params : undefined);
 };
 
 const anim = (cfg: Cfg) => {
@@ -66,14 +140,24 @@ const tui: TuiPlugin = async (api, options) => {
   if (options?.enabled === false) return;
 
   const [value, setValue] = createSignal(load(api, cfg(options)));
+  const keybind = api.keybind.create({ logo_splash: splashKeybind }, obj(options?.keybinds));
   const apply: (buffer: OptimizedBuffer, delta: number) => void = createRainbowPostProcess(
     () => api.theme.current,
     value,
   );
+  const splash: SplashState = {
+    phase: "idle",
+    elapsed: 0,
+    queued: false,
+  };
+  let previousRoute: TuiRouteCurrent = { name: "home" };
   let live = false;
+  let disposed = false;
+
+  const splashLive = () => splash.phase !== "idle";
 
   const sync = (cfg = value()) => {
-    const next = anim(cfg);
+    const next = anim(cfg) || splashLive();
     if (next && !live) {
       api.renderer.requestLive();
       live = true;
@@ -84,6 +168,80 @@ const tui: TuiPlugin = async (api, options) => {
       live = false;
     }
   };
+
+  const startSplash = () => {
+    if (splash.phase !== "idle") return;
+    const current = api.route.current;
+    if (current.name === splashRoute) return;
+    api.ui.dialog.clear();
+    previousRoute = cloneRoute(current);
+    splash.phase = "fade-in";
+    splash.elapsed = 0;
+    splash.queued = false;
+    sync();
+    api.renderer.requestRender();
+  };
+
+  const leaveSplash = () => {
+    splash.phase = "idle";
+    splash.elapsed = 0;
+    splash.queued = false;
+    navigateRoute(api, previousRoute);
+    sync();
+    api.renderer.requestRender();
+  };
+
+  const fadeToLogo = (buffer: OptimizedBuffer, delta: number) => {
+    if (splash.phase === "idle") return;
+    splash.elapsed += delta;
+
+    let strength = 0;
+    if (splash.phase === "fade-in") {
+      const t = clamp(splash.elapsed / splashFadeInMs, 0, 1);
+      strength = splashFadeIn(t);
+      if (t >= 1 && !splash.queued) {
+        splash.phase = "hold";
+        splash.elapsed = 0;
+        splash.queued = true;
+        queueMicrotask(() => {
+          if (disposed) return;
+          api.route.navigate(splashRoute);
+          splash.queued = false;
+          sync();
+          api.renderer.requestRender();
+        });
+      }
+    } else if (splash.phase === "hold") {
+      strength = 1;
+      if (splash.elapsed >= splashPeakHoldMs) {
+        splash.phase = "fade-out";
+        splash.elapsed = 0;
+      }
+    } else {
+      const t = clamp(splash.elapsed / splashFadeOutMs, 0, 1);
+      strength = splashFadeOut(t);
+      if (t >= 1) {
+        splash.phase = "idle";
+        splash.elapsed = 0;
+        splash.queued = false;
+        sync();
+        return;
+      }
+    }
+
+    if (strength <= 0) return;
+    setWhiteMatrix(strength);
+    buffer.colorMatrixUniform(whiteMatrix, 1, TargetChannel.Both);
+  };
+
+  api.route.register([
+    {
+      name: splashRoute,
+      render() {
+        return <LogoScreen theme={() => api.theme.current} onExit={leaveSplash} />;
+      },
+    },
+  ]);
 
   const save = <K extends Field>(key: K, next: Cfg[K]) => {
     const prev = value();
@@ -112,9 +270,20 @@ const tui: TuiPlugin = async (api, options) => {
   };
 
   api.renderer.addPostProcessFn(apply);
+  api.renderer.addPostProcessFn(fadeToLogo);
   sync();
 
   api.command.register(() => [
+    {
+      title: "Show logo splash",
+      value: splashCommand,
+      keybind: keybind.get("logo_splash"),
+      category: "Plugin",
+      description: "Fade to white and reveal a centered OpenCode logo screen",
+      onSelect() {
+        startSplash();
+      },
+    },
     {
       title: "Rainbow settings",
       value: `${id}.settings`,
@@ -129,7 +298,9 @@ const tui: TuiPlugin = async (api, options) => {
   ]);
 
   api.lifecycle.onDispose(() => {
+    disposed = true;
     api.renderer.removePostProcessFn(apply);
+    api.renderer.removePostProcessFn(fadeToLogo);
     if (live) {
       api.renderer.dropLive();
       live = false;

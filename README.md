@@ -38,6 +38,7 @@ Plugin options can be configured via the `tui.json` config file.
 - `speed` (`number`, default `0.008`, range `0`-`0.03`)
 - `turns` (`number`, default `3`, range `0.25`-`8`)
 - `glow` (`number`, default `0.05`, range `0`-`0.15`)
+- `keybinds.logo_splash` (`string`, default `ctrl+shift+r`): trigger the white-flash logo route
 
 Example:
 
