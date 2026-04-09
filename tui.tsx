@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { TargetChannel, type OptimizedBuffer } from "@opentui/core";
-import type { TuiPlugin, TuiPluginModule, TuiRouteCurrent } from "@opencode-ai/plugin/tui";
+import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui";
 import { createSignal } from "solid-js";
 import { LogoScreen } from "./logo-screen";
 import { createRainbowPostProcess } from "./rainbow-post-process";
@@ -99,19 +99,6 @@ const setWhiteMatrix = (strength: number) => {
   whiteMatrix[15] = 1;
 };
 
-const cloneRoute = (route: TuiRouteCurrent): TuiRouteCurrent => {
-  if (!("params" in route)) return { name: "home" };
-  if (!route.params) return { name: route.name };
-  return {
-    name: route.name,
-    params: { ...route.params },
-  };
-};
-
-const navigateRoute = (api: Api, route: TuiRouteCurrent) => {
-  api.route.navigate(route.name, "params" in route ? route.params : undefined);
-};
-
 const anim = (cfg: Cfg) => {
   return cfg.speed > 0 && (cfg.fg || (cfg.bg && cfg.glow > 0));
 };
@@ -150,7 +137,6 @@ const tui: TuiPlugin = async (api, options) => {
     elapsed: 0,
     queued: false,
   };
-  let previousRoute: TuiRouteCurrent = { name: "home" };
   let live = false;
   let disposed = false;
 
@@ -174,7 +160,6 @@ const tui: TuiPlugin = async (api, options) => {
     const current = api.route.current;
     if (current.name === splashRoute) return;
     api.ui.dialog.clear();
-    previousRoute = cloneRoute(current);
     splash.phase = "fade-in";
     splash.elapsed = 0;
     splash.queued = false;
@@ -186,7 +171,7 @@ const tui: TuiPlugin = async (api, options) => {
     splash.phase = "idle";
     splash.elapsed = 0;
     splash.queued = false;
-    navigateRoute(api, previousRoute);
+    api.route.navigate("home");
     sync();
     api.renderer.requestRender();
   };
