@@ -3,6 +3,10 @@
   "name": "oc-plugin-rainbow",
   "version": "0.1.0",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anomalyco/oc-plugin-rainbow.git"
+  },
   "exports": {
     "./tui": {
       "import": "./tui.tsx",
