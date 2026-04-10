@@ -23,6 +23,9 @@ const splashFadeInMs = 1050;
 const splashPeakHoldMs = 34;
 const splashFadeOutMs = 100;
 const splashKeybind = "ctrl+shift+r";
+const rainbowMinFps = 12;
+const rainbowMaxFps = 24;
+const rainbowPhaseStep = 0.05;
 
 type SplashPhase = "idle" | "fade-in" | "hold" | "fade-out";
 type SplashState = {
@@ -103,6 +106,12 @@ const anim = (cfg: Cfg) => {
   return cfg.speed > 0 && (cfg.fg || (cfg.bg && cfg.glow > 0));
 };
 
+const rainbowFrameMs = (cfg: Cfg) => {
+  const phaseRate = cfg.speed * (cfg.fg ? 0.1 : 0.04);
+  if (phaseRate <= 0) return 1000 / rainbowMinFps;
+  return clamp(rainbowPhaseStep / phaseRate, 1000 / rainbowMaxFps, 1000 / rainbowMinFps);
+};
+
 const cfg = (opts: Record<string, unknown> | undefined): Cfg => {
   return {
     fg: bool(opts?.fg, true),
@@ -139,19 +148,43 @@ const tui: TuiPlugin = async (api, options) => {
   };
   let live = false;
   let disposed = false;
+  let rainbowTimer: ReturnType<typeof setTimeout> | undefined;
 
   const splashLive = () => splash.phase !== "idle";
 
+  const clearRainbowTimer = () => {
+    if (rainbowTimer === undefined) return;
+    clearTimeout(rainbowTimer);
+    rainbowTimer = undefined;
+  };
+
+  // Keep the ambient effect on one-shot renders instead of a continuous live loop.
+  const scheduleRainbow = (cfg = value()) => {
+    if (disposed || splashLive() || !anim(cfg) || rainbowTimer !== undefined) return;
+    rainbowTimer = setTimeout(() => {
+      rainbowTimer = undefined;
+      if (disposed || splashLive()) return;
+      const next = value();
+      if (!anim(next)) return;
+      api.renderer.requestRender();
+      scheduleRainbow(next);
+    }, rainbowFrameMs(cfg));
+  };
+
   const sync = (cfg = value()) => {
-    const next = anim(cfg) || splashLive();
-    if (next && !live) {
+    const nextLive = splashLive();
+    if (nextLive && !live) {
       api.renderer.requestLive();
       live = true;
-      return;
     }
-    if (!next && live) {
+    if (!nextLive && live) {
       api.renderer.dropLive();
       live = false;
+    }
+
+    clearRainbowTimer();
+    if (!nextLive && anim(cfg)) {
+      scheduleRainbow(cfg);
     }
   };
 
@@ -284,6 +317,7 @@ const tui: TuiPlugin = async (api, options) => {
 
   api.lifecycle.onDispose(() => {
     disposed = true;
+    clearRainbowTimer();
     api.renderer.removePostProcessFn(apply);
     api.renderer.removePostProcessFn(fadeToLogo);
     if (live) {
